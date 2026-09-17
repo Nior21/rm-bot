@@ -2,6 +2,7 @@ import { Router } from "express";
 import { loadSettings, saveSettings, type AppSettings } from "../config.js";
 import {
   deleteAccount,
+  getFeedback,
   listAccounts,
   listChats,
   listFeedback,
@@ -12,7 +13,7 @@ import {
   updateFeedback,
 } from "../db/index.js";
 import { restartBot } from "../bot/index.js";
-import { spawnFeedbackAgent } from "../services/cursor-api.js";
+import { getQueueSnapshot, tickAgentQueue } from "../services/agent-queue.js";
 import { normalizePhoneE164 } from "../services/phone.js";
 import { listRedmineProjects } from "../services/redmine.js";
 
@@ -193,16 +194,49 @@ export function createApiRouter(requireAdmin: (req: import("express").Request) =
     res.json(listFeedback());
   });
 
+  r.get("/queue", (req, res) => {
+    if (!requireAdmin(req)) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    res.json(getQueueSnapshot());
+  });
+
+  r.post("/queue/tick", async (req, res) => {
+    if (!requireAdmin(req)) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    try {
+      const snapshot = await tickAgentQueue();
+      res.json(snapshot);
+    } catch (e) {
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+
   r.post("/feedback/:id/run-cursor", async (req, res) => {
     if (!requireAdmin(req)) {
       res.status(403).json({ error: "forbidden" });
       return;
     }
     const id = Number(req.params.id);
-    const body = String(req.body?.prompt ?? "Implement feedback ticket");
+    const row = getFeedback(id);
+    if (!row) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
     try {
-      const agentId = await spawnFeedbackAgent(id, body);
-      res.json({ agentId });
+      if (!["in_progress", "cursor", "queued", "open"].includes(row.status)) {
+        updateFeedback(id, {
+          status: "queued",
+          cursor_agent_id: null,
+          started_at: null,
+          finished_at: null,
+        });
+      }
+      const snapshot = await tickAgentQueue();
+      res.json({ ok: true, snapshot });
     } catch (e) {
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
     }

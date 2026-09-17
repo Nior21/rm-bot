@@ -3,12 +3,32 @@ import fs from "fs";
 import path from "path";
 import { migrations } from "./schema.js";
 
-const dbPath = path.join(process.cwd(), "data", "rm-bot.db");
-
+let dbPathOverride: string | null = null;
 let db: DatabaseSync | null = null;
+
+export function setDbPathForTests(p: string | null): void {
+  closeDb();
+  dbPathOverride = p;
+}
+
+export function closeDb(): void {
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      /* ignore */
+    }
+    db = null;
+  }
+}
+
+function resolveDbPath(): string {
+  return dbPathOverride || process.env.RM_BOT_DB_PATH || path.join(process.cwd(), "data", "rm-bot.db");
+}
 
 export function getDb(): DatabaseSync {
   if (!db) {
+    const dbPath = resolveDbPath();
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     db = new DatabaseSync(dbPath);
     try {
@@ -17,8 +37,31 @@ export function getDb(): DatabaseSync {
       /* ignore */
     }
     db.exec(migrations);
+    migrateFeedbackColumns(db);
   }
   return db;
+}
+
+function tableColumns(dbi: DatabaseSync, table: string): Set<string> {
+  const rows = dbi.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return new Set(rows.map((r) => r.name));
+}
+
+function migrateFeedbackColumns(dbi: DatabaseSync): void {
+  const cols = tableColumns(dbi, "feedback_tickets");
+  const add: [string, string][] = [
+    ["started_at", "started_at TEXT"],
+    ["finished_at", "finished_at TEXT"],
+    ["result_summary", "result_summary TEXT"],
+    ["pr_url", "pr_url TEXT"],
+  ];
+  for (const [name, ddl] of add) {
+    if (!cols.has(name)) dbi.exec(`ALTER TABLE feedback_tickets ADD COLUMN ${ddl}`);
+  }
+  dbi.exec("CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback_tickets(status)");
+  dbi.prepare("UPDATE feedback_tickets SET status = 'queued' WHERE status = 'open'").run();
+  dbi.prepare("UPDATE feedback_tickets SET status = 'in_progress' WHERE status = 'cursor'").run();
+  dbi.prepare("UPDATE feedback_tickets SET status = 'failed' WHERE status = 'cursor_failed'").run();
 }
 
 export type AccountRow = {
@@ -303,53 +346,158 @@ export function replacePhonebook(rows: {
   }
 }
 
+export const QUEUED_STATUSES = ["queued", "open"] as const;
+export const IN_PROGRESS_STATUSES = ["in_progress", "cursor"] as const;
+export const FAILED_STATUSES = ["failed", "cursor_failed"] as const;
+
+export type FeedbackRow = {
+  id: number;
+  telegram_user_id: number | null;
+  chat_id: number | null;
+  body: string;
+  status: string;
+  cursor_agent_id: string | null;
+  git_commit: string | null;
+  deploy_ok: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  result_summary: string | null;
+  pr_url: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export function insertFeedback(body: {
   telegram_user_id?: number;
   chat_id?: number;
   body: string;
+  status?: string;
 }): number {
   const r = getDb()
     .prepare(
-      `INSERT INTO feedback_tickets (telegram_user_id, chat_id, body) VALUES (@telegram_user_id, @chat_id, @body)`,
+      `INSERT INTO feedback_tickets (telegram_user_id, chat_id, body, status)
+       VALUES (@telegram_user_id, @chat_id, @body, @status)`,
     )
     .run({
       telegram_user_id: body.telegram_user_id ?? null,
       chat_id: body.chat_id ?? null,
       body: body.body,
+      status: body.status ?? "queued",
     });
   return Number(r.lastInsertRowid);
 }
 
-export function listFeedback(): {
-  id: number;
-  body: string;
-  status: string;
-  cursor_agent_id: string | null;
-  deploy_ok: number | null;
-  created_at: string;
-}[] {
+export function getFeedback(id: number): FeedbackRow | undefined {
   return getDb()
-    .prepare(
-      "SELECT id, body, status, cursor_agent_id, deploy_ok, created_at FROM feedback_tickets ORDER BY id DESC LIMIT 100",
-    )
-    .all() as {
-    id: number;
-    body: string;
-    status: string;
-    cursor_agent_id: string | null;
-    deploy_ok: number | null;
-    created_at: string;
-  }[];
+    .prepare("SELECT * FROM feedback_tickets WHERE id = ?")
+    .get(id) as FeedbackRow | undefined;
 }
 
-export function updateFeedback(id: number, patch: {
-  status?: string;
-  cursor_agent_id?: string;
-  git_commit?: string;
-  deploy_ok?: boolean;
-}): void {
+export function listFeedback(): FeedbackRow[] {
+  return getDb()
+    .prepare("SELECT * FROM feedback_tickets ORDER BY id DESC LIMIT 100")
+    .all() as FeedbackRow[];
+}
+
+export function listQueuedFeedback(): FeedbackRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM feedback_tickets
+       WHERE status IN ('queued', 'open')
+       ORDER BY id ASC`,
+    )
+    .all() as FeedbackRow[];
+}
+
+export function listInProgressFeedback(): FeedbackRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM feedback_tickets
+       WHERE status IN ('in_progress', 'cursor')
+       ORDER BY id ASC`,
+    )
+    .all() as FeedbackRow[];
+}
+
+export function listRecentFinishedFeedback(limit = 5): FeedbackRow[] {
+  return getDb()
+    .prepare(
+      `SELECT * FROM feedback_tickets
+       WHERE status IN ('done', 'failed', 'cursor_failed')
+       ORDER BY COALESCE(finished_at, updated_at) DESC
+       LIMIT ?`,
+    )
+    .all(limit) as FeedbackRow[];
+}
+
+/** Берёт следующую заявку из очереди, если никто не в работе. */
+export function claimNextFeedback(): FeedbackRow | null {
+  const dbi = getDb();
+  dbi.exec("BEGIN IMMEDIATE");
+  try {
+    const busy = dbi
+      .prepare(
+        "SELECT id FROM feedback_tickets WHERE status IN ('in_progress', 'cursor') LIMIT 1",
+      )
+      .get();
+    if (busy) {
+      dbi.exec("COMMIT");
+      return null;
+    }
+    const next = dbi
+      .prepare(
+        `SELECT * FROM feedback_tickets
+         WHERE status IN ('queued', 'open')
+         ORDER BY id ASC
+         LIMIT 1`,
+      )
+      .get() as FeedbackRow | undefined;
+    if (!next) {
+      dbi.exec("COMMIT");
+      return null;
+    }
+    dbi
+      .prepare(
+        `UPDATE feedback_tickets
+         SET status = 'in_progress',
+             started_at = datetime('now'),
+             updated_at = datetime('now')
+         WHERE id = ?`,
+      )
+      .run(next.id);
+    dbi.exec("COMMIT");
+    return getFeedback(next.id) ?? null;
+  } catch (e) {
+    dbi.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+export function unclaimFeedback(id: number): void {
+  getDb()
+    .prepare(
+      `UPDATE feedback_tickets
+       SET status = 'queued', started_at = NULL, updated_at = datetime('now')
+       WHERE id = ? AND status IN ('in_progress', 'cursor')`,
+    )
+    .run(id);
+}
+
+export function updateFeedback(
+  id: number,
+  patch: {
+    status?: string;
+    cursor_agent_id?: string | null;
+    git_commit?: string;
+    deploy_ok?: boolean;
+    started_at?: string | null;
+    finished_at?: string | null;
+    result_summary?: string | null;
+    pr_url?: string | null;
+  },
+): void {
   const fields: string[] = ["updated_at = datetime('now')"];
-  const params: Record<string, string | number> = { id };
+  const params: Record<string, string | number | null> = { id };
   if (patch.status !== undefined) {
     fields.push("status = @status");
     params.status = patch.status;
@@ -366,7 +514,41 @@ export function updateFeedback(id: number, patch: {
     fields.push("deploy_ok = @deploy_ok");
     params.deploy_ok = patch.deploy_ok ? 1 : 0;
   }
+  if (patch.started_at !== undefined) {
+    fields.push("started_at = @started_at");
+    params.started_at = patch.started_at;
+  }
+  if (patch.finished_at !== undefined) {
+    fields.push("finished_at = @finished_at");
+    params.finished_at = patch.finished_at;
+  }
+  if (patch.result_summary !== undefined) {
+    fields.push("result_summary = @result_summary");
+    params.result_summary = patch.result_summary;
+  }
+  if (patch.pr_url !== undefined) {
+    fields.push("pr_url = @pr_url");
+    params.pr_url = patch.pr_url;
+  }
   getDb()
     .prepare(`UPDATE feedback_tickets SET ${fields.join(", ")} WHERE id = @id`)
     .run(params);
+}
+
+export function markFeedbackFinished(
+  id: number,
+  status: "done" | "failed",
+  extra?: { result_summary?: string | null; pr_url?: string | null },
+): void {
+  getDb()
+    .prepare(
+      `UPDATE feedback_tickets
+       SET status = ?,
+           finished_at = datetime('now'),
+           updated_at = datetime('now'),
+           result_summary = ?,
+           pr_url = ?
+       WHERE id = ?`,
+    )
+    .run(status, extra?.result_summary ?? null, extra?.pr_url ?? null, id);
 }

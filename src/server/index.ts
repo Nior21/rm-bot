@@ -5,6 +5,7 @@ import path from "path";
 import { loadSettings } from "../config.js";
 import { startBot } from "../bot/index.js";
 import { adminWebUrls } from "../services/lan-urls.js";
+import { startAgentWorker } from "../services/agent-worker.js";
 import { createApiRouter } from "./routes.js";
 
 const settings = loadSettings();
@@ -53,6 +54,7 @@ app.listen(port, host, () => {
 });
 
 startBot().catch((e) => console.error("[bot] start failed", e));
+startAgentWorker();
 
 process.on("unhandledRejection", (reason) => {
   console.error("[process] unhandledRejection", reason);
