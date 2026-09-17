@@ -100,6 +100,7 @@ export function App() {
   function saveSecret() {
     setSecret(secret);
     setMsg("Секрет сохранён в sessionStorage");
+    if (secret) void load();
   }
 
   async function saveSettingsForm(e: React.FormEvent<HTMLFormElement>) {
