@@ -55,14 +55,19 @@ CREATE TABLE IF NOT EXISTS feedback_tickets (
   telegram_user_id INTEGER,
   chat_id INTEGER,
   body TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'open',
+  status TEXT NOT NULL DEFAULT 'queued',
   cursor_agent_id TEXT,
   git_commit TEXT,
   deploy_ok INTEGER,
+  started_at TEXT,
+  finished_at TEXT,
+  result_summary TEXT,
+  pr_url TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_threads_chat ON task_threads(chat_id);
 CREATE INDEX IF NOT EXISTS idx_phonebook_company ON phonebook(company);
+CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback_tickets(status);
 `;

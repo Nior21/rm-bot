@@ -34,6 +34,17 @@ type Feedback = {
   cursor_agent_id: string | null;
   deploy_ok: number | null;
   created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  result_summary?: string | null;
+  pr_url?: string | null;
+};
+
+type QueueSnapshot = {
+  current: Feedback | null;
+  extraInProgress: Feedback[];
+  waiting: Feedback[];
+  recentDone: Feedback[];
 };
 
 type RedmineProject = { id: number; name: string; identifier: string };
@@ -47,6 +58,7 @@ export function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [chats, setChats] = useState<Chat[]>([]);
   const [feedback, setFeedback] = useState<Feedback[]>([]);
+  const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [phoneJson, setPhoneJson] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -59,7 +71,14 @@ export function App() {
       if (tab === "settings") setSettings(await api<Settings>("/settings"));
       if (tab === "accounts") setAccounts(await api<Account[]>("/accounts"));
       if (tab === "chats") setChats(await api<Chat[]>("/chats"));
-      if (tab === "feedback") setFeedback(await api<Feedback[]>("/feedback"));
+      if (tab === "feedback") {
+        const [rows, snap] = await Promise.all([
+          api<Feedback[]>("/feedback"),
+          api<QueueSnapshot>("/queue"),
+        ]);
+        setFeedback(rows);
+        setQueue(snap);
+      }
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e);
       setErr(raw.includes("forbidden") ? "Доступ запрещён (forbidden): неверный секрет админа." : raw);
@@ -68,6 +87,14 @@ export function App() {
 
   useEffect(() => {
     if (secret) load();
+  }, [secret, tab, load]);
+
+  useEffect(() => {
+    if (!secret || tab !== "feedback") return;
+    const t = setInterval(() => {
+      load().catch(() => undefined);
+    }, 10_000);
+    return () => clearInterval(t);
   }, [secret, tab, load]);
 
   function saveSecret() {
@@ -318,6 +345,36 @@ export function App() {
 
       {tab === "feedback" && (
         <div className="card">
+          <div className="queue-banner">
+            {queue?.current ? (
+              <>
+                <strong>Сейчас в работе:</strong> #{queue.current.id} — {queue.current.body.slice(0, 120)}
+                {queue.current.started_at ? ` (с ${queue.current.started_at})` : ""}
+              </>
+            ) : (
+              <strong>Сейчас в работе: никто. Агент свободен.</strong>
+            )}
+            {queue && queue.waiting.length > 0 && (
+              <p style={{ margin: "0.5rem 0 0" }}>
+                В очереди ({queue.waiting.length}):{" "}
+                {queue.waiting.map((t) => `#${t.id}`).join(", ")}
+              </p>
+            )}
+            {queue && queue.waiting.length === 0 && (
+              <p style={{ margin: "0.5rem 0 0" }}>Очередь пуста.</p>
+            )}
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              api("/queue/tick", { method: "POST", body: "{}" })
+                .then(() => load())
+                .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
+            }
+          >
+            Обновить статусы
+          </button>
           <table>
             <thead>
               <tr>
@@ -325,15 +382,36 @@ export function App() {
                 <th>Статус</th>
                 <th>Текст</th>
                 <th>Cursor</th>
+                <th>Когда</th>
               </tr>
             </thead>
             <tbody>
               {feedback.map((f) => (
-                <tr key={f.id}>
+                <tr
+                  key={f.id}
+                  className={
+                    f.status === "in_progress" || f.status === "cursor" ? "current-job" : ""
+                  }
+                >
                   <td>{f.id}</td>
-                  <td>{f.status}</td>
-                  <td>{f.body.slice(0, 120)}</td>
+                  <td>
+                    <span className={`status-pill status-${normalizeStatus(f.status)}`}>
+                      {statusLabel(f.status)}
+                    </span>
+                  </td>
+                  <td>
+                    {f.body.slice(0, 120)}
+                    {f.pr_url ? (
+                      <>
+                        <br />
+                        <a href={f.pr_url} target="_blank" rel="noreferrer">
+                          PR
+                        </a>
+                      </>
+                    ) : null}
+                  </td>
                   <td>{f.cursor_agent_id ?? "—"}</td>
+                  <td>{f.started_at || f.created_at}</td>
                 </tr>
               ))}
             </tbody>
@@ -342,4 +420,26 @@ export function App() {
       )}
     </div>
   );
+}
+
+function normalizeStatus(status: string): string {
+  if (status === "open") return "queued";
+  if (status === "cursor") return "in_progress";
+  if (status === "cursor_failed") return "failed";
+  return status;
+}
+
+function statusLabel(status: string): string {
+  switch (normalizeStatus(status)) {
+    case "queued":
+      return "в очереди";
+    case "in_progress":
+      return "в работе";
+    case "done":
+      return "готово";
+    case "failed":
+      return "ошибка";
+    default:
+      return status;
+  }
 }
