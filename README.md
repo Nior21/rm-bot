@@ -1,0 +1,75 @@
+# RM Bot
+
+Telegram-бот (long polling) и локальная веб-админка для оформления задач в рабочем чате по регламенту, интеграции с Redmine, телефонной книгой и заявками на доработку через Cursor API.
+
+Стек: **Node.js 22+**, **TypeScript**, **grammY**, **Express**, **React (Vite)**, **SQLite** (`node:sqlite`, без native-сборки).
+
+## Быстрый старт (Windows)
+
+1. Установите [Node.js 22 LTS](https://nodejs.org/) или новее.
+2. В каталоге проекта:
+
+```powershell
+copy .env.example .env
+# заполните WEB_ADMIN_SECRET и при желании токены
+npm install
+npm run dev
+```
+
+3. Откройте **http://127.0.0.1:3847** — введите `WEB_ADMIN_SECRET`, укажите токен бота, Cursor API, привяжите аккаунты Redmine и chat id.
+
+4. Добавьте бота в рабочий чат, выдайте права на чтение/отправку/удаление (для ответов-дополнений).
+
+## Команды бота
+
+| Команда | Действие |
+|--------|----------|
+| `/task` | Ответом на сообщение менеджера — разбор, нормализация, Redmine (если нет ссылки), итоговое сообщение |
+| `/feedback текст` | Заявка на доработку (опционально уходит в Cursor API) |
+| `/ping` | Проверка связи |
+
+Также бот реагирует, если в **конце** сообщения указан `@username_бота`.
+
+## Регламент
+
+Бот формирует сообщение в формате хороших примеров: **неделя → клиент → телефон и имя → описание → ссылка Redmine**, напоминает о недостающих полях (MarkdownV2, жирный заголовок). Телефоны приводятся к виду `+7 903 269-74-32` для штатного tap-to-call в Telegram.
+
+Цепочка ответов на **корневое** сообщение задачи: фразы вида «добавь телефон …» дополняют карточку; успешные служебные ответы бот старается удалить.
+
+## Телефонная книга
+
+Образец: `data/phonebook.sample.json`. Загрузка через вкладку «Телефонная книга» в веб-UI или `PUT /api/phonebook`.
+
+## Продакшен на ноутбуке
+
+```powershell
+npm run build
+npm start
+```
+
+Автозапуск при входе в Windows:
+
+```powershell
+npm run build
+powershell -ExecutionPolicy Bypass -File scripts/register-autostart.ps1
+```
+
+Минимальный деплой с откатом, если `/api/health` не OK:
+
+```powershell
+powershell -File scripts/deploy-with-rollback.ps1 -FeedbackId 12
+```
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`): `typecheck`, `test`, `build` на `windows-latest`.
+
+## Администратор
+
+По умолчанию admin Telegram ID: **233097427** (@Nior90, Ivan). Меняется в настройках веб-UI.
+
+## Переменные окружения
+
+См. `.env.example`. Рабочие значения также сохраняются в `data/settings.json` через веб-интерфейс.
+
+Optional для Cursor-агентов: `CURSOR_REPO_URL`, `CURSOR_GIT_REF`.

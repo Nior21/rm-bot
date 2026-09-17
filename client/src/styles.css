@@ -1,0 +1,118 @@
+:root {
+  font-family: system-ui, Segoe UI, sans-serif;
+  color: #1a1a1a;
+  background: #f4f5f7;
+}
+
+body {
+  margin: 0;
+}
+
+.wrap {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+h1 {
+  font-size: 1.35rem;
+  margin: 0 0 1rem;
+}
+
+.card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  margin-top: 0.65rem;
+  color: #444;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+button {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.9rem;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #64748b;
+}
+
+.row {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.row > * {
+  flex: 1;
+  min-width: 200px;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tabs button {
+  margin-top: 0;
+  background: #e2e8f0;
+  color: #111;
+}
+
+.tabs button.active {
+  background: #2563eb;
+  color: #fff;
+}
+
+.err {
+  color: #b91c1c;
+  font-size: 0.9rem;
+}
+
+.ok {
+  color: #15803d;
+  font-size: 0.9rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.4rem 0.35rem;
+  border-bottom: 1px solid #eee;
+}

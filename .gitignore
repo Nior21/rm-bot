@@ -1,0 +1,15 @@
+node_modules/
+dist/
+client/dist/
+data/*.db
+data/*.db-*
+data/settings.json
+data/logs/
+*.bak
+.env
+.env.local
+*.log
+.DS_Store
+data/settings.json
+data/logs/
+*.bak

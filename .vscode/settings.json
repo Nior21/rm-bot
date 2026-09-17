@@ -1,0 +1,10 @@
+{
+  "remote.autoForwardPorts": true,
+  "remote.autoForwardPortsSource": "hybrid",
+  "remote.portsAttributes": {
+    "3847": {
+      "label": "RM Bot admin",
+      "onAutoForward": "notify"
+    }
+  }
+}
